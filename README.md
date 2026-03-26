@@ -89,5 +89,4 @@ Place your MOSEK license file at the appropriate path (see above).
 
 - **Joint ambiguity set:** The Wasserstein ball is defined over the joint noise `(w, v)`, allowing the solver to find worst-case cross-correlations between process and measurement noise.
 - **Cached SDP structure:** The CVXPY problem is constructed once and reused with warm-starting across time steps for efficiency.
-- **EM parameter estimation:** `common_utils.py` provides an EKF-smoother EM procedure for estimating nominal noise parameters from input-output data, supporting arbitrary nonlinear dynamics.
 - **Paired Monte Carlo:** Experiment scripts reset the random seed per filter so that EKF and DR-EKF experience identical noise realizations, enabling fair paired comparisons.
