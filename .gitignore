@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+/.claude
+/results
+/old_files
+analyze_inputs.py
+analyze_inputs_MPC.py
