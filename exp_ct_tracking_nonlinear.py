@@ -466,7 +466,7 @@ def main(dist, num_sim, num_exp, T_total=10.0, num_samples=100):
     _ = int(T_total / dt)  # kept for consistency with original script
     nx, ny = 5, 2
 
-    theta_eff_vals = [0.001, 0.01, 0.1]
+    theta_eff_vals = [0.001, 0.005]
     tube_params = (0.3, 0.2, 1.7, 1.7)
     eta_scale = 1.0
 

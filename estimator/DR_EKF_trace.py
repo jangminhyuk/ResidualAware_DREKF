@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
-DR_EKF_trace.py — Joint-ball DR-EKF with Gaussian one-pass effective radius.
+DR_EKF_trace.py — Joint-ball DR-EKF with one-pass effective radius
+                   and recursive Pbar certificate.
 
 Implements a distributionally robust Extended Kalman filter (DR-EKF) with
 joint ambiguity sets.  The effective Wasserstein radius is inflated at each
-time step to absorb EKF linearization residuals (theorem-safe version).
+time step to absorb EKF linearization residuals via a recursive scalar
+bound Pbar_t (not trace(P)).
 
 Assumptions:
   (A1) Noise-centric ambiguity: the true joint noise (w_t, v_t) lies in
@@ -12,31 +14,33 @@ Assumptions:
   (A2) Raw-noise independence: w_t and v_t are independent.
   (A3) Local Hessian bounds: ||nabla^2 f|| <= L_f, ||nabla^2 h|| <= L_h.
 
-Radius computation (t >= 1)
-----------------------------
-  eta_f = (Lf/2) * sqrt(3) * Tr(Sigma_{x,t-1})
-
-  rho_w = theta_w + eta_f
-
-  tbar_prior = Tr(A_{t-1} @ Sigma_{x,t-1} @ A_{t-1}^T)
-               + (sqrt(Tr(Sigma_w_hat)) + rho_w)^2
-
-  eta_h = (Lh/2) * sqrt(3) * tbar_prior
-
-  theta_eps   = sqrt(theta_w^2 + theta_v^2)
-  eta_eps     = sqrt(eta_f^2 + eta_h^2)
-  theta_eff_eps = theta_eps + eta_eps
-
 Initial stage (t = 0)
 ----------------------
-  Replace theta_w by theta_x0 and set eta_f = 0:
-
-  tbar_prior_0 = (sqrt(Tr(Sigma_x0_hat)) + theta_x0)^2
-
-  eta_h0 = (Lh/2) * sqrt(3) * tbar_prior_0
-
-  theta_eps0     = sqrt(theta_x0^2 + theta_v^2)
+  theta_eps0 = sqrt(theta_x0^2 + theta_v^2)
+  gamma0     = (sqrt(Tr(Sigma_x0_hat)) + theta_eps0)^2
+  eta_f0     = 0
+  eta_h0     = 0.5 * L_h * alpha_h * gamma0
   theta_eff_eps0 = theta_eps0 + eta_h0
+
+  After SDP solve and K0:
+    rbar0 = 2 * ||K0||^2 * eta_h0^2
+    rho0  = sqrt(rbar0)
+    Pbar0 = (sqrt(Tr(Sigma_x_post_star_0)) + rho0)^2
+
+Radius computation (t >= 1)
+----------------------------
+  theta_eps  = sqrt(theta_w^2 + theta_v^2)
+  eta_f      = 0.5 * L_f * alpha_f * Pbar_{t-1}
+  gamma_t    = (||A_t||_2 * sqrt(Pbar_{t-1})
+               + sqrt(Tr(Sigma_w_hat)) + theta_eps + eta_f)^2
+  eta_h      = 0.5 * L_h * alpha_h * gamma_t
+  theta_eff_eps = theta_eps + sqrt(eta_f^2 + eta_h^2)
+
+  After SDP solve and K_t:
+    kappa_t = ||(I - K_t C_t) A_t||_2
+    rbar_t  = 2 ||I - K_t C_t||^2 eta_f^2 + 2 ||K_t||^2 eta_h^2
+    rho_t   = kappa_t * rho_{t-1} + sqrt(rbar_t)
+    Pbar_t  = (sqrt(Tr(Sigma_x_post_star_t)) + rho_t)^2
 """
 
 import numpy as np
@@ -118,7 +122,7 @@ class DR_EKF_trace(BaseFilter):
         if theta_eff_cap is not None:
             self.theta_eff_cap = theta_eff_cap
         elif self.theta_eps_base is not None:
-            self.theta_eff_cap = 5.0 * self.theta_eps_base
+            self.theta_eff_cap = 3.0 * self.theta_eps_base
         else:
             self.theta_eff_cap = None
 
@@ -132,8 +136,16 @@ class DR_EKF_trace(BaseFilter):
         self.R_f = R_f if R_f is not None else (alpha_f if alpha_f is not None else np.sqrt(3))
         self.R_h = R_h if R_h is not None else (alpha_h if alpha_h is not None else np.sqrt(3))
 
+        # Explicit alpha parameters for one-pass radius (backward compat: fall back to R_f/R_h)
+        self.alpha_f = alpha_f if alpha_f is not None else (R_f if R_f is not None else np.sqrt(3))
+        self.alpha_h = alpha_h if alpha_h is not None else (R_h if R_h is not None else np.sqrt(3))
+
         # Initialize posterior covariance for online computation
         self._P = None
+
+        # Recursive certificate state (scalar)
+        self._Pbar = None       # scalar Pbar_t
+        self._rho_cert = None   # scalar rho_t
 
         # Pre-created SDP problems and parameter references for efficiency
         self._sdp_problem_initial = None
@@ -144,83 +156,92 @@ class DR_EKF_trace(BaseFilter):
         self._warm_start_vars_regular = None
 
     # ------------------------------------------------------------------
-    # Certified effective-radius computation (t >= 1)
+    # One-pass effective-radius computation (t >= 1)
     # ------------------------------------------------------------------
-    def _compute_theta_eps_effective(self, X_post_prev, A_t):
-        """Gaussian one-pass effective radius (theorem-safe).
+    def _compute_theta_eps_effective(self, Pbar_prev, A_t):
+        """One-pass effective radius for t >= 1 using recursive Pbar bound.
 
-        eta_f = (Lf/2) * sqrt(3) * Tr(Sigma_{x,t-1})
-        rho_w = theta_w + eta_f
-        tbar_prior = Tr(A Sigma A^T) + (sqrt(Tr(Sigma_w_hat)) + rho_w)^2
-        eta_h = (Lh/2) * sqrt(3) * tbar_prior
-        theta_eps = sqrt(theta_w^2 + theta_v^2)
-        eta_eps = sqrt(eta_f^2 + eta_h^2)
-        theta_eff_eps = theta_eps + eta_eps
+        theta_eps  = sqrt(theta_w^2 + theta_v^2)
+        eta_f      = 0.5 * L_f * alpha_f * Pbar_prev
+        gamma_t    = (||A_t||_2 * sqrt(Pbar_prev)
+                     + sqrt(Tr(Sigma_w_hat)) + theta_eps + eta_f)^2
+        eta_h      = 0.5 * L_h * alpha_h * gamma_t
+        theta_eff  = theta_eps + sqrt(eta_f^2 + eta_h^2)
         """
-        sqrt3 = np.sqrt(3.0)
-
-        # Step 1: dynamics residual (scaled by eta_scale)
-        tr_P = max(float(np.trace(X_post_prev)), 0.0)
-        eta_f = self.eta_scale * 0.5 * self.L_f * sqrt3 * tr_P
-
-        # Step 2: inflated process radius
-        rho_w = self.theta_w + eta_f
-
-        # Step 3: prior trace proxy
-        tr_APA = max(float(np.trace(A_t @ X_post_prev @ A_t.T)), 0.0)
-        tr_Sigma_w_hat = max(float(np.trace(self.nominal_Sigma_w)), 0.0)
-        tbar_prior = tr_APA + (np.sqrt(tr_Sigma_w_hat) + rho_w)**2
-
-        # Step 4: observation residual (scaled by eta_scale)
-        eta_h = self.eta_scale * 0.5 * self.L_h * sqrt3 * tbar_prior
-
-        # Step 5: effective joint radius (with cap to prevent blowup)
+        # Joint noise radius
         theta_eps = self.theta_eps_base  # sqrt(theta_w^2 + theta_v^2)
-        eta_eps = np.sqrt(eta_f**2 + eta_h**2)
-        theta_eps_effective = theta_eps + eta_eps
+
+        # Dynamics residual from Pbar bound
+        eta_f = 0.5 * self.L_f * self.alpha_f * Pbar_prev
+
+        # Prior second-moment bound (gamma uses theta_eps, not theta_w)
+        A_norm = np.linalg.norm(A_t, ord=2)
+        tr_Sigma_w = max(float(np.trace(self.nominal_Sigma_w)), 0.0)
+        gamma_t = (A_norm * np.sqrt(Pbar_prev)
+                   + np.sqrt(tr_Sigma_w)
+                   + theta_eps
+                   + eta_f) ** 2
+
+        # Observation residual
+        eta_h = 0.5 * self.L_h * self.alpha_h * gamma_t
+
+        # Cap individual residuals to prevent overflow in eta_f**2 + eta_h**2
+        if self.theta_eff_cap is not None:
+            eta_f = min(eta_f, self.theta_eff_cap)
+            eta_h = min(eta_h, self.theta_eff_cap)
+
+        # Effective radius (with empirical cap)
+        theta_eps_effective = theta_eps + np.sqrt(eta_f**2 + eta_h**2)
         if self.theta_eff_cap is not None and theta_eps_effective > self.theta_eff_cap:
             theta_eps_effective = self.theta_eff_cap
 
         # Diagnostics
+        self._last_theta_eps = theta_eps
+        self._last_gamma = gamma_t
         self._last_eta_f = eta_f
         self._last_eta_h = eta_h
-        self._last_eta_eps = eta_eps
         self._last_theta_eps_effective = theta_eps_effective
         return theta_eps_effective
 
     # ------------------------------------------------------------------
-    # Certified effective-radius computation (t = 0)
+    # One-pass effective-radius computation (t = 0)
     # ------------------------------------------------------------------
     def _compute_theta_eps0_effective(self):
-        """Gaussian one-pass effective radius for t=0.
+        """One-pass effective radius for t=0.
 
-        At t=0: replace theta_w by theta_x0, set eta_f=0.
-          tbar_prior_0 = (sqrt(Tr(Sigma_x0_hat)) + theta_x0)^2
-          eta_h0 = (Lh/2) * sqrt(3) * tbar_prior_0
-          theta_eps0 = sqrt(theta_x0^2 + theta_v^2)
-          theta_eff_eps0 = theta_eps0 + eta_h0
+        theta_eps0 = sqrt(theta_x0^2 + theta_v^2)
+        gamma0     = (sqrt(Tr(Sigma_x0_hat)) + theta_eps0)^2
+        eta_f0     = 0
+        eta_h0     = 0.5 * L_h * alpha_h * gamma0
+        theta_eff_eps0 = theta_eps0 + eta_h0
         """
-        sqrt3 = np.sqrt(3.0)
+        # Joint noise radius at t=0
+        theta_eps0 = np.sqrt(self.theta_x0**2 + self.theta_v**2)
 
-        # Prior trace proxy at t=0 (no dynamics, eta_f=0, rho_w=theta_x0)
+        # Prior second-moment bound
         tr_x0_cov = max(float(np.trace(self.nominal_x0_cov)), 0.0)
-        tbar_prior_0 = (np.sqrt(tr_x0_cov) + self.theta_x0)**2
+        gamma0 = (np.sqrt(tr_x0_cov) + theta_eps0)**2
 
-        # Observation residual (scaled by eta_scale)
-        eta_h0 = self.eta_scale * 0.5 * self.L_h * sqrt3 * tbar_prior_0
+        # Linearization residuals
+        eta_f0 = 0.0
+        eta_h0 = 0.5 * self.L_h * self.alpha_h * gamma0
 
-        # Effective joint radius (with cap to prevent blowup)
-        theta_eps0_base = np.sqrt(self.theta_x0**2 + self.theta_v**2)
-        theta_eps0_effective = theta_eps0_base + eta_h0
-        if self.theta_eff_cap is not None and theta_eps0_effective > self.theta_eff_cap:
-            theta_eps0_effective = self.theta_eff_cap
+        # Cap observation residual to prevent overflow
+        if self.theta_eff_cap is not None:
+            eta_h0 = min(eta_h0, self.theta_eff_cap)
+
+        # Effective radius (with empirical cap)
+        theta_eff_eps0 = theta_eps0 + eta_h0
+        if self.theta_eff_cap is not None and theta_eff_eps0 > self.theta_eff_cap:
+            theta_eff_eps0 = self.theta_eff_cap
 
         # Diagnostics
-        self._last_eta_f = 0.0
+        self._last_theta_eps = theta_eps0
+        self._last_gamma = gamma0
+        self._last_eta_f = eta_f0
         self._last_eta_h = eta_h0
-        self._last_eta_eps = eta_h0
-        self._last_theta_eps_effective = theta_eps0_effective
-        return theta_eps0_effective
+        self._last_theta_eps_effective = theta_eff_eps0
+        return theta_eff_eps0
 
     # ------------------------------------------------------------------
     # SDP construction — initial step (t = 0)
@@ -415,7 +436,7 @@ class DR_EKF_trace(BaseFilter):
         """Solve joint-ball SDP for t>0 with certified theta_eps_effective."""
         prob, params = self._create_and_cache_sdp_regular()
 
-        theta_eps_effective = self._compute_theta_eps_effective(X_post_prev, A_t)
+        theta_eps_effective = self._compute_theta_eps_effective(self._Pbar, A_t)
 
         params['Sigma_w_hat'].value = self.nominal_Sigma_w
         params['Sigma_v_hat'].value = self.nominal_Sigma_v
@@ -480,6 +501,52 @@ class DR_EKF_trace(BaseFilter):
         T = wc_Xprior @ C_t.T + wc_Sigma_cross
         S = C_t @ wc_Xprior @ C_t.T + wc_Sigma_v + C_t @ wc_Sigma_cross + wc_Sigma_cross.T @ C_t.T
         K_star = np.linalg.solve(S, T.T).T
+
+        # ----------------------------------------------------------
+        # Recursive certificate state update (rho_t, Pbar_t)
+        # ----------------------------------------------------------
+        tr_Xpost = max(float(np.trace(wc_Xpost)), 0.0)
+
+        if t == 0:
+            eta_h0 = self._last_eta_h
+            K_norm = np.linalg.norm(K_star, ord=2)
+            rbar0 = 2.0 * K_norm**2 * eta_h0**2
+            rho0 = np.sqrt(rbar0)
+            if self.theta_eff_cap is not None:
+                rho0 = min(rho0, self.theta_eff_cap)
+            Pbar0 = (np.sqrt(tr_Xpost) + rho0)**2
+
+            self._rho_cert = rho0
+            self._Pbar = Pbar0
+
+            # Diagnostics
+            self._last_rbar = rbar0
+            self._last_kappa = 0.0
+            self._last_rho_cert = rho0
+            self._last_Pbar = Pbar0
+        else:
+            eta_f = self._last_eta_f
+            eta_h = self._last_eta_h
+            rho_prev = self._rho_cert
+
+            I_nx = np.eye(self.nx)
+            IKC = I_nx - K_star @ C_t
+            kappa_t = np.linalg.norm(IKC @ A_t, ord=2)
+            rbar_t = (2.0 * np.linalg.norm(IKC, ord=2)**2 * eta_f**2
+                      + 2.0 * np.linalg.norm(K_star, ord=2)**2 * eta_h**2)
+            rho_t = kappa_t * rho_prev + np.sqrt(rbar_t)
+            if self.theta_eff_cap is not None:
+                rho_t = min(rho_t, self.theta_eff_cap)
+            Pbar_t = (np.sqrt(tr_Xpost) + rho_t)**2
+
+            self._rho_cert = rho_t
+            self._Pbar = Pbar_t
+
+            # Diagnostics
+            self._last_rbar = rbar_t
+            self._last_kappa = kappa_t
+            self._last_rho_cert = rho_t
+            self._last_Pbar = Pbar_t
 
         innovation = y - (self.h(x_prior) + v_mean_hat)
         x_post = x_prior + K_star @ innovation
