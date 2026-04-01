@@ -158,6 +158,9 @@ def _setup_style():
         "font.sans-serif": ["Helvetica", "Arial", "DejaVu Sans"],
         "mathtext.fontset": "dejavusans",
         "font.size": 9,
+        # PDF/PS: use TrueType (Type 42) fonts to avoid Type 3 font errors
+        "pdf.fonttype": 42,
+        "ps.fonttype": 42,
         # Axes
         "axes.labelsize": 11,
         "axes.titlesize": 12,
@@ -460,7 +463,7 @@ def main():
     parser.add_argument("--label2", default="seed 2019", type=str)
     parser.add_argument(
         "--results_dir_1",
-        default="./results/exp_ct_tracking_seed2024",
+        default="./results/exp_ct_tracking",
         type=str,
         help="Results directory for first seed (will be created if missing)",
     )

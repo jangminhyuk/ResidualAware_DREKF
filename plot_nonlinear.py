@@ -51,6 +51,9 @@ def _setup_style():
         "font.sans-serif": ["Helvetica", "Arial", "DejaVu Sans"],
         "mathtext.fontset": "dejavusans",
         "font.size": 9,
+        # PDF/PS: use TrueType (Type 42) fonts to avoid Type 3 font errors
+        "pdf.fonttype": 42,
+        "ps.fonttype": 42,
         # Axes
         "axes.labelsize": 11,
         "axes.titlesize": 12,

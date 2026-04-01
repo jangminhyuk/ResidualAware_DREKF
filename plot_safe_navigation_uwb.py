@@ -52,6 +52,9 @@ def _setup_style():
                                  "Arial", "DejaVu Sans"],
         "mathtext.fontset":     "stixsans",
         "font.size":            10,
+        # PDF/PS: use TrueType (Type 42) fonts to avoid Type 3 font errors
+        "pdf.fonttype":         42,
+        "ps.fonttype":          42,
 
         # --- Axes ---
         "axes.labelsize":       10,
@@ -737,8 +740,18 @@ def plot_traj_margin_combined_col(data, save_dir, n_show=5):
             r = results[i]
             px = r['x_true'][:, 0, 0]
             py = r['x_true'][:, 1, 0]
-            ax_traj.plot(px, py, color=s['color'], alpha=0.7,
-                         linewidth=1.8, linestyle='-', zorder=4)
+            if r['any_collision']:
+                coll_idx = int(np.argmax(r['collisions']))
+                ax_traj.plot(px[:coll_idx + 1], py[:coll_idx + 1],
+                             color=s['color'], alpha=0.85, linewidth=1.8,
+                             linestyle='-', zorder=4)
+                ax_traj.plot(px[coll_idx], py[coll_idx],
+                             marker='x', color='black', markersize=8,
+                             markeredgewidth=1.8,
+                             alpha=0.95, zorder=7)
+            else:
+                ax_traj.plot(px, py, color=s['color'], alpha=0.7,
+                             linewidth=1.8, linestyle='-', zorder=4)
 
     _draw_beacons(ax_traj, beacon_pos, show_labels=False)
     _draw_start_goal(ax_traj, start, goal, params['GOAL_RADIUS'])

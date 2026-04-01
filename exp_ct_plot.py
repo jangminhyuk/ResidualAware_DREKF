@@ -10,6 +10,10 @@ import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 
+# Use TrueType (Type 42) fonts in PDF/PS to avoid Type 3 font errors on submission
+plt.rcParams["pdf.fonttype"] = 42
+plt.rcParams["ps.fonttype"] = 42
+
 RESULTS_DIR = "./results/exp_ct_tracking"
 FILTERS_ORDER = ['EKF', 'DR_EKF_trace', 'DR_EKF_trace_multipass']
 

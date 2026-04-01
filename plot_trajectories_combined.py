@@ -107,6 +107,9 @@ def plot_combined(trajectory_data, filters_order,
         "xtick.labelsize":  10,
         "ytick.labelsize":  10,
         "legend.fontsize":  11,
+        # PDF/PS: use TrueType (Type 42) fonts to avoid Type 3 font errors
+        "pdf.fonttype":     42,
+        "ps.fonttype":      42,
     })
 
     filters_order = [f for f in filters_order if f != "DR_EKF_trace_multipass"]
