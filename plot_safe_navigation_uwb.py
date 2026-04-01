@@ -35,7 +35,7 @@ from matplotlib.lines import Line2D
 
 _C = {
     "grid":         "#D5D9E0",   # cool light gray
-    "panel_bg":     "#FAFAFA",   # neutral white
+    "panel_bg":     "#FFFFFF",   # white
 }
 
 
@@ -676,6 +676,155 @@ def plot_traj_margin_combined(data, save_dir, n_show=5):
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Figure 1d — nav_traj_margin_combined_col.pdf  (column-stacked)
+# ──────────────────────────────────────────────────────────────────────
+
+def plot_traj_margin_combined_col(data, save_dir, n_show=5):
+    """Combined portrait figure: trajectories (top) + safety margin (bottom)."""
+    params = data['params']
+    conds = data['conditions']
+    obs_c = np.array(params['OBS_CENTER'])
+    obs_r = params['OBS_RADIUS']
+    goal = np.array(params['GOAL_POS'])
+    start = np.array(params['START_POS'])
+    beacon_pos = np.array(params['BEACON_POS'])
+    hw = params['ARENA_HALF_WIDTH']
+    time_ax = _time_axis(params)
+    ORDER = _get_condition_order(conds)
+
+    # --- Panel sizing ---
+    x_span = (goal[0] + 2.0) - (-0.5)
+    y_span = 2 * hw
+    traj_w = 6.0
+    traj_h = traj_w * (y_span / x_span)
+    margin_h = traj_h
+    gap = 0.9
+    left_pad = 0.72
+    right_pad = 0.25
+    bot_pad = 0.25
+    top_pad = 1.1
+    fig_w = left_pad + traj_w + right_pad
+    fig_h = bot_pad + margin_h + gap + traj_h + top_pad
+
+    fig = plt.figure(figsize=(fig_w, fig_h))
+    fig.patch.set_facecolor("white")
+
+    ax_w = traj_w / fig_w
+    x0 = left_pad / fig_w
+
+    # Trajectory panel on top
+    traj_bot = (bot_pad + margin_h + gap) / fig_h
+    ax_traj = fig.add_axes([x0, traj_bot, ax_w, traj_h / fig_h])
+
+    # Margin panel on bottom
+    marg_bot = bot_pad / fig_h
+    ax_marg = fig.add_axes([x0, marg_bot, ax_w, margin_h / fig_h])
+
+    # ---- Top panel: trajectory overlay ----
+    shadow = plt.Circle((obs_c[0] + 0.08, obs_c[1] - 0.08), obs_r,
+                         facecolor='black', alpha=0.15, zorder=2)
+    ax_traj.add_patch(shadow)
+    _draw_obstacle(ax_traj, obs_c, obs_r)
+
+    for key in ORDER:
+        if key not in conds:
+            continue
+        s = _sty(key)
+        c = conds[key]
+        results = c['results']
+        indices = np.linspace(0, len(results) - 1, n_show, dtype=int)
+        for i in indices:
+            r = results[i]
+            px = r['x_true'][:, 0, 0]
+            py = r['x_true'][:, 1, 0]
+            ax_traj.plot(px, py, color=s['color'], alpha=0.7,
+                         linewidth=1.8, linestyle='-', zorder=4)
+
+    _draw_beacons(ax_traj, beacon_pos, show_labels=False)
+    _draw_start_goal(ax_traj, start, goal, params['GOAL_RADIUS'])
+    ax_traj.text(start[0] + 0.8, start[1] + 0.5, 'Start', fontsize=15,
+                 fontweight='bold', ha='center', va='bottom', zorder=12,
+                 path_effects=[pe.withStroke(linewidth=2.5, foreground='white')])
+    ax_traj.text(goal[0], goal[1] + 0.5, 'Goal', fontsize=15,
+                 fontweight='bold', ha='center', va='bottom', zorder=12,
+                 path_effects=[pe.withStroke(linewidth=2.5, foreground='white')])
+
+    ax_traj.set_xlim(-0.5, goal[0] + 2.0)
+    ax_traj.set_ylim(-hw, hw)
+    ax_traj.set_xlabel(r'x (m)', fontsize=15)
+    ax_traj.set_ylabel(r'y (m)', fontsize=15)
+    ax_traj.tick_params(which="major", direction="in", top=True, right=True,
+                        labelsize=13, length=6, width=1.0)
+    ax_traj.tick_params(which="minor", direction="in", top=True, right=True,
+                        length=3.5, width=0.6)
+    ax_traj.xaxis.set_major_locator(plt.MultipleLocator(3))
+    ax_traj.yaxis.set_major_locator(plt.MultipleLocator(2))
+    ax_traj.set_aspect('equal')
+    ax_traj.text(0.025, 0.965, '(a)', transform=ax_traj.transAxes,
+                 fontsize=16, fontweight='bold', va='top', ha='left',
+                 zorder=20, color="black",
+                 path_effects=[pe.withStroke(linewidth=2.5, foreground='white')])
+
+    # ---- Bottom panel: safety margin time series ----
+    for key in ORDER:
+        if key not in conds:
+            continue
+        s = _sty(key)
+        c = conds[key]
+        margins_all = np.array([r['margins'] for r in c['results']])
+        m_mean = np.nanmean(margins_all, axis=0)
+        m_lo = np.nanpercentile(margins_all, 10, axis=0)
+        m_hi = np.nanpercentile(margins_all, 90, axis=0)
+        ax_marg.plot(time_ax, m_mean, color=s['color'], linewidth=1.8,
+                     linestyle=s['ls'], zorder=4)
+        _fill_band(ax_marg, time_ax, m_lo, m_hi, s['color'])
+
+    ax_marg.set_xlabel('Time (s)', fontsize=15)
+    ax_marg.set_ylabel(r'Safety margin $\delta_t$ (m)', fontsize=15)
+    ax_marg.tick_params(which="major", direction="in", top=True, right=True,
+                        labelsize=13, length=6, width=1.0)
+    ax_marg.tick_params(which="minor", direction="in", top=True, right=True,
+                        length=3.5, width=0.6)
+    ax_marg.xaxis.set_major_locator(plt.MultipleLocator(3))
+    ax_marg.yaxis.set_major_locator(plt.MultipleLocator(0.5))
+    ekf_true_key = 'EKF_true' if 'EKF_true' in conds else 'EKF_true_zm'
+    if ekf_true_key in conds:
+        t_maxes = [r['t_reach'] for r in conds[ekf_true_key]['results']
+                   if r['t_reach'] is not None]
+        t_max_steps = max(t_maxes) if t_maxes else params['T']
+    else:
+        t_max_steps = params['T']
+    ax_marg.set_xlim(0, t_max_steps * params['DT'])
+    ax_marg.set_ylim(bottom=0)
+    ax_marg.text(0.025, 0.965, '(b)', transform=ax_marg.transAxes,
+                 fontsize=16, fontweight='bold', va='top', ha='left',
+                 zorder=20, color="black",
+                 path_effects=[pe.withStroke(linewidth=2.5, foreground='white')])
+
+    # ---- Shared legend at top ----
+    legend_handles = []
+    for key in ORDER:
+        if key not in conds:
+            continue
+        s = _sty(key)
+        legend_handles.append(Line2D([0], [0], color=s['color'], linewidth=1.8,
+                                      linestyle=s['ls'], label=s['label']))
+    legend_handles.append(Line2D([0], [0], marker='D', color='0.35',
+                                  linestyle='', markersize=7,
+                                  markeredgecolor='black', markeredgewidth=0.8,
+                                  label='UWB beacon'))
+    fig.legend(handles=legend_handles, fontsize=16,
+               loc='upper center', bbox_to_anchor=(0.50, 0.94),
+               ncol=len(legend_handles), frameon=False,
+               columnspacing=0.5, handletextpad=0.3, handlelength=1.5)
+    save_path = os.path.join(save_dir, 'nav_traj_margin_combined_1.pdf')
+    plt.savefig(save_path, dpi=600, bbox_inches="tight",
+                facecolor=fig.get_facecolor())
+    plt.close(fig)
+    print(f'Saved: {save_path}')
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Figure 2 — nav_trajectories.pdf  (side-by-side per filter)
 # ──────────────────────────────────────────────────────────────────────
 
@@ -1254,6 +1403,7 @@ def main():
     plot_main_4panel(data, args.results_dir)
     plot_trajectories_overlay(data, args.results_dir)
     plot_traj_margin_combined(data, args.results_dir)
+    plot_traj_margin_combined_col(data, args.results_dir)
     plot_trajectories(data, args.results_dir)
     plot_margin_time_series(data, args.results_dir)
     plot_outcome_bar(data, args.results_dir)

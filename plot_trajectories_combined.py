@@ -61,6 +61,8 @@ def _draw_traj_panel(ax, trajectory_data, filt, chosen_exp,
     ax.xaxis.set_minor_locator(MultipleLocator(1))
     ax.yaxis.set_major_locator(MultipleLocator(5))
     ax.yaxis.set_minor_locator(MultipleLocator(1))
+    ax.grid(True, which="major", color=pn._C["grid"], linewidth=0.45,
+            linestyle=":", alpha=0.85, zorder=0)
 
     if filt not in trajectory_data:
         ax.text(0.5, 0.5, "No data", ha="center", va="center",
