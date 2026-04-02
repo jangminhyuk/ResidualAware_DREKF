@@ -58,6 +58,21 @@ py safe_navigation_uwb.py --n-trials 10
 py plot_safe_navigation_uwb.py
 ```
 
+## 3. Safe Navigation in Crowds scenes
+
+This repository contains experiments for distributionally robust EKF (DR-EKF) localization with UWB beacons and a compass, combined with unicycle navigation on ETH/UCY-style pedestrian datasets. Pedestrian motion is forecast with CANVAS predictors (e.g. Trajectron) from non-ego agent histories; a sample-based MPC plans controls under predicted agents and static geometry. Static and interactive scripts reproduce trajectory plots and canvas rollouts used in the paper-style analysis.
+
+```bash
+export CANVAS_ROOT="/path/to/CANVAS"
+python navigation_trajectories.py
+```
+
+
+
+
+
+
+
 ## Requirements
 
 - Python 3.8+
