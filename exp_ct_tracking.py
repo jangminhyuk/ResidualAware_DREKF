@@ -433,7 +433,7 @@ if __name__ == "__main__":
     parser.add_argument('--num_exp', default=100, type=int)
     parser.add_argument('--T_total', default=50.0, type=float)
     parser.add_argument('--num_samples', default=20, type=int)
-    parser.add_argument('--seed_base', default=2026, type=int,
+    parser.add_argument('--seed_base', default=2024, type=int,
                         help="Base random seed for experiments (default: 2026)")
     args = parser.parse_args()
     main(args.dist, args.num_sim, args.num_exp, args.T_total, args.num_samples, args.seed_base)
